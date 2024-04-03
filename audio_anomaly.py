@@ -16,10 +16,7 @@ except:
     print('For faster work sklearn install sklearnex')
     pass
 
-
-from podbor import proborFA, ScreePlotFA
 from helpers import export_to_MP3, model_save, model_load
-import models
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import IsolationForest
@@ -40,6 +37,8 @@ parser.add_argument('--learning_time', '-l', default=10, type=int,
                     help=r'Learning time (in minutes) for normal sound profile create. (Default: 10 minutes.)')
 parser.add_argument('--num_components', '-reduce_features', default=0, type=int,
                     help=r'Principal Component Analysis components count (10-3500). (Default: 0; 0 - disabled.)')
+parser.add_argument('--num_estimators', '-e', default=0, type=int,
+                    help=r'Number of simple evaluators for anomaly detection. More is better. (10-3500). (Default: 300)')
 parser.add_argument('--MP3_len', '-mp3', default=14, type=int,
                     help=r'Length of .mp3 file. (Default: 14 seconds.)')
 parser.add_argument('--model_name', '-m', default='silence',
@@ -99,10 +98,11 @@ class AudioPCAModel:
     Очень быстрая модель. При необходимости сделается PCA для сокращения размерности, а потом
     изолирующий лес выявляет аномалии
     """
-    def __init__(self, num_components):
+    def __init__(self, num_components, n_estimators=300):
         self.num_components = num_components
         self.model = None
         self.reduce_features = None
+        self.n_estimators=n_estimators
 
     def learn_model(self, raw_buffer):
         logger.info('Learning AudioPCAModel: Start analyse data build')
@@ -122,7 +122,8 @@ class AudioPCAModel:
             X_train = self.reduce_features.transform(X_train)
             logger.info(f'Размерность обучающего набора после PCA reduce_features {X_train.shape}')
         logger.info('Start IsolationForest fit')
-        self.model = IsolationForest(n_estimators=300, max_samples=0.9, contamination=0.005, verbose=1)
+        logger.debug(f'n_estimators={self.n_estimators}')
+        self.model = IsolationForest(n_estimators=self.n_estimators, max_samples=0.9, contamination=0.005, verbose=1)
         self.model.fit(X_train)
         logger.info('End learning')
         return self.model
@@ -133,151 +134,6 @@ class AudioPCAModel:
             return self.model.predict(reduced_line)
         else:
             return self.model.predict(line)
-
-
-import optuna, random
-from scipy.stats import anderson
-
-Audio_norms_get_subsumms = 'None'
-
-class AudioNormsModel:
-    """
-    Создание класса для отслеживания аномалий по величине множественной дисперсии.
-    0. Собираются нормальные данные и в виде примитивов data поступают на вход.
-    1. Примитивы нормируются.
-    2. Используется генерация фич методом сумирования простейших примитивов.
-    3. Получившиеся суммы снова нормируются и их общая сумма служит мерилом аномальности.
-    """
-
-    def __init__(self, codename, num_components=300, subsumm_len=30):
-        self.num_components = num_components
-        self.subsumm_len = subsumm_len
-        self.scaler = StandardScaler()  # первый нормализатор. ДО подсуммирования
-        self.codename = codename
-        self.code = None  # кодированный словарь для составления сумм ()
-        self.scaler_reduced = StandardScaler()  # второй нормализатор, ПОСЛЕ суммирования
-        self.anomaly_max_percentile = 95 # какой прецентиль участвует в определении аномальности
-
-    def init_codename(self):
-        if os.path.isfile(f'./model/{self.codename}.py'):
-            import importlib
-            global Audio_norms_get_subsumms
-            Audio_norms_get_subsumms = importlib.import_module(f'model.{self.codename}')
-            return True
-        else:
-            raise Exception(f'File not found ./model/{self.codename}.py')
-
-    def objective(self, trial, data, subsumm_len):
-        subsumm = -1
-        for i in range(subsumm_len):
-            # выберем колонки и какой знак у колонок
-            znak = trial.suggest_int(f'znak{i}', -1, 1)
-            kolonka_nr = trial.suggest_int(f'col{i}', 0, data.shape[1] - 1)
-            if znak < 0:
-                kolonka = data[:, kolonka_nr].astype(np.float64)
-            else:
-                kolonka = data[:, kolonka_nr].astype(np.float64)
-
-            if i == 0:
-                subsumm = kolonka
-                if znak < 0: subsumm = -kolonka
-            else:
-                if znak < 0:
-                    subsumm -= kolonka
-                else:
-                    subsumm += kolonka
-            # print(f'np.std(subsumm)={np.std(subsumm)}')
-        # return np.std(subsumm) # требование минимальности стандартного отклонения
-        # альтернатива - требование нормальности
-        norm_test = anderson(subsumm)
-        return norm_test.statistic / norm_test.critical_values[0]
-
-    def learn_subsumm(self, data, optuna_n_trials=30):
-        study = optuna.create_study()
-        study.optimize(lambda trial: self.objective(trial, data, self.subsumm_len), n_trials=optuna_n_trials)
-        return study.best_params
-
-    def build_code(self, data, codes):
-        str = 'import numba\n'
-        str += 'import numpy as np\n'
-        str += '#@numba.jit( )\n'
-        str += 'def run(data):\n'
-        str += f'\tresult=np.empty( ({len(codes)}, data.shape[1]), dtype=np.{data.dtype.name})\n'
-        for i, code in enumerate(codes):
-            row_code = f'\tresult[{i}] = '
-            minuses=[]
-            pluses=[]
-            for i in range(0, self.subsumm_len):
-                if code[f'znak{i}'] < 0:
-                    minuses.append(code[f"col{i}"])
-                else:
-                    pluses.append(code[f"col{i}"])
-
-            # for i in range(0, self.subsumm_len):
-            #     if code[f'znak{i}'] < 0:
-            #         row_code += '-'
-            #     else:
-            #         row_code += '+'
-            #     row_code += f'data[{code[f"col{i}"]}]'
-            # str += f'{row_code}\n'
-
-            if len(pluses)>0:
-                pluses.sort()
-                row_code += f'+ np.sum(data[{pluses},], axis=0) '
-            if len(minuses) > 0:
-                minuses.sort()
-                row_code += f'- np.sum(data[{minuses},], axis=0)'
-            str += row_code+'\n'
-        str += f'\treturn result\n'
-        return str
-
-    def learn_model(self, raw_buffer):
-        if not isinstance(raw_buffer, list):
-            raise TypeError("AudioNormsModel: Only list are allowed")
-        test = get_line(raw_buffer, 0)
-        X_train = np.empty((len(raw_buffer) - FOREST_FRAMES_INPUT, test.shape[1]), dtype=FLOAT_TYPE)
-        logger.info(f'AudioNormsModel: Размерность обучающего набора {X_train.shape}')
-        # X_train=X_train.reshape(1, X_train.shape[0])
-        for get_subsumms in trange(0, len(raw_buffer) - FOREST_FRAMES_INPUT):
-            X_train[get_subsumms] = get_line(raw_buffer, get_subsumms)[0]
-
-        logger.info('Learning; Normalize data')
-        self.scaler.fit(X_train)
-        X_train = self.scaler.transform(X_train)
-
-        # после создания обучающего набора будем подбирать подсуммы
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-        logger.info('Start optuna subsumms')
-        code = []
-        for get_subsumms in trange(0, self.num_components):
-            code.append(self.learn_subsumm(X_train))
-        self.code = code
-
-        # теперь нужно сформировать сокращенную обучающую выборку
-        logger.info('Start code generator')
-        code_str = self.build_code(X_train, code)
-        with open(f'./model/{self.codename}.py', "w") as text_file:
-            text_file.write(code_str)
-
-        self.init_codename()
-
-        reduced = Audio_norms_get_subsumms.run(X_train).transpose()
-        self.scaler_reduced.fit(reduced)
-        final_data = self.scaler_reduced.transform(reduced)
-        # scores = np.mean(np.abs(final_data), axis=1)
-        scores = np.percentile(np.abs(final_data), self.anomaly_max_percentile, axis=1)
-        self.treshold = np.percentile(scores, 99.95)
-        logger.info(f'AudioNormsModel treshold= {self.treshold:.3}' )
-
-    def predict(self, line):
-        data_norm = self.scaler.transform(line)
-        reduced = Audio_norms_get_subsumms.run(data_norm.transpose()).transpose()
-        final_data = self.scaler_reduced.transform(reduced)
-        # score = np.mean(np.abs(final_data))
-        score = np.percentile(np.abs(final_data), self.anomaly_max_percentile, axis=1)
-        return score / self.treshold
-
-
 
 
 logger.info('Start')
@@ -354,9 +210,10 @@ while True:
     score = np.mean(np.abs(scaled_data_chunk))/1.1
     signal_str = f'Аномальность {score:.3}  70%  {(np.percentile(np.abs(scaled_data_chunk),70)-0.3)/1.1:.3}; 90%  {(np.percentile(np.abs(scaled_data_chunk),90)-0.95)/1.1:.3}'
     logger.debug(signal_str)
+    score = (np.percentile(np.abs(scaled_data_chunk), 90) - 0.95)/1.2
     if smoothed_score>0.4:
         signal_str = f'Аномальность {smoothed_score:.3}'
-    score = (np.percentile(np.abs(scaled_data_chunk), 90) - 0.95)/1.2
+        if score>1.5: signal_str += f'[90% {score:.3}]'
 
 
     if learning_signal_left_count < 1 and model == None:
@@ -366,7 +223,7 @@ while True:
         # model_save(model_n, f'.\model\{args.model_name}_n.zstd')
         # model_n = model_load(f'.\model\{args.model_name}_n.zstd')
 
-        model = AudioPCAModel(args.num_components)
+        model = AudioPCAModel(args.num_components, n_estimators= args.num_estimators)
         model.learn_model(mfcc_buff)
         model_save(model, f'.\model\{args.model_name}.zstd')
         model_save(mfcc_buff, f'.\model\{args.model_name}_mfcc_buff.zstd')
@@ -409,7 +266,7 @@ while True:
                 filename = f"anomaly_{now.strftime('%Y%m%d-%H%M%S')}_{smoothed_score:.3}.mp3"
                 # ставим признак записи MP3, записываем, сколько фреймов ждать до начала записи
                 # ставим число таким, что бы было несколько секунд до аномалии и несколько после
-                need_to_save_mp3 = need_to_save_mp3 + history_buff.max_items // 2
+                if need_to_save_mp3==-1: need_to_save_mp3 =  history_buff.max_items // 2
 
     if need_to_save_mp3 > 0: need_to_save_mp3 -= 1 # это в случае, если недавно обнаружили аномалию
     if need_to_save_mp3 < -1: need_to_save_mp3 += 1 # это в случае, если только что записали mp3
@@ -421,3 +278,4 @@ while True:
         export_to_MP3(history_buff.get_items(), RATE, full_path, kbps=128)
         model_save(mfcc_buff, full_path + '.mfcc')
         logger.debug(f'Записали {full_path}')
+        if smoothed_score>1: smoothed_score = 1.00001
