@@ -1,0 +1,8 @@
+tmp/
+bin/
+*.bak
+*.mp3
+*.zstd
+*.zip
+*.mfcc
+*.log
