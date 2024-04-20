@@ -23,6 +23,7 @@ from sklearn.ensemble import IsolationForest
 from tqdm import trange
 import argparse
 import os.path
+from sklearn.decomposition import FactorAnalysis
 
 from loguru import logger
 import sys
@@ -30,7 +31,10 @@ import sys
 logger.remove()
 logger.add("audio_anomaly.log", rotation="10 MB", retention=3, compression="zip", backtrace=True,
            diagnose=True)  # Automatically rotate too big file
-logger.add(sys.stdout, colorize=True, format="<green>{time:HH:mm:ss}</green> <level>{message}</level>", level='INFO')
+try:
+    logger.add(sys.stdout, colorize=True, format="<green>{time:HH:mm:ss}</green> <level>{message}</level>", level='INFO')
+except  Exception as e:
+    logger.debug(f'logger.add(sys.stdout) Error: {str(e)}')
 
 parser = argparse.ArgumentParser(description='Audio anomaly detect and save .mp3')
 parser.add_argument('--learning_time', '-l', default=10, type=int,
@@ -90,7 +94,6 @@ def get_line(data_array: list, num='last'):
     return result.reshape(1, result.shape[0])
 
 
-from sklearn.decomposition import FactorAnalysis
 
 
 class AudioPCAModel:
