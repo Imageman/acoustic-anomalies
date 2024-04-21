@@ -41,7 +41,7 @@ parser.add_argument('--learning_time', '-l', default=10, type=int,
                     help=r'Learning time (in minutes) for normal sound profile create. (Default: 10 minutes.)')
 parser.add_argument('--num_components', '-reduce_features', default=0, type=int,
                     help=r'Principal Component Analysis components count (10-3500). (Default: 0; 0 - disabled.)')
-parser.add_argument('--num_estimators', '-e', default=0, type=int,
+parser.add_argument('--num_estimators', '-e', default=300, type=int,
                     help=r'Number of simple evaluators for anomaly detection. More is better. (10-3500). (Default: 300)')
 parser.add_argument('--MP3_len', '-mp3', default=14, type=int,
                     help=r'Length of .mp3 file. (Default: 14 seconds.)')
@@ -58,7 +58,7 @@ SECONDS_MP3 = args.MP3_len  # длина записанного файла
 FOREST_FRAMES_INPUT = 8 * 44  # 44 фрейма это примерно 1 сек
 learning_signal_left_count = args.learning_time * 60  # как долго будем собирать статистику?
 MP3PATH=args.save_path
-logger.info(f'Для анализа используется {FOREST_FRAMES_INPUT//44} сек. записи. \nЗапись в {MP3PATH}')
+logger.info(f'The {FOREST_FRAMES_INPUT//44} sec. of recording is used for analysis. \nRecording to {MP3PATH}')
 
 # FLOAT_TYPE = np.float16
 FLOAT_TYPE = np.float32
@@ -98,6 +98,8 @@ def get_line(data_array: list, num='last'):
 
 class AudioPCAModel:
     """
+    A very fast model. PCA to reduce dimensionality if necessary, and then the the isolation forest reveals anomalies
+
     Очень быстрая модель. При необходимости сделается PCA для сокращения размерности, а потом
     изолирующий лес выявляет аномалии
     """
@@ -106,12 +108,17 @@ class AudioPCAModel:
         self.model = None
         self.reduce_features = None
         self.n_estimators=n_estimators
+        if self.n_estimators<30:
+            logger.warning(f'n_estimators={n_estimators}, replace with 30')
+            self.n_estimators = 30
+        if self.n_estimators<300:
+            logger.info(f'n_estimators={n_estimators}. The number of estimators is small. Increase to 300 or more.')
 
     def learn_model(self, raw_buffer):
         logger.info('Learning AudioPCAModel: Start analyse data build')
         test = get_line(raw_buffer.items, 0)
         X_train = np.empty((len(raw_buffer) - FOREST_FRAMES_INPUT, test.shape[1]), dtype=FLOAT_TYPE)
-        logger.info(f'Размерность обучающего набора {X_train.shape}')
+        logger.info(f'Dimensionality of the training set {X_train.shape}')
         # X_train=X_train.reshape(1, X_train.shape[0])
         for i in trange(0, len(raw_buffer) - FOREST_FRAMES_INPUT):
             X_train[i] = get_line(raw_buffer.items, i)[0]
@@ -123,7 +130,7 @@ class AudioPCAModel:
             self.reduce_features.fit(X_train)
             logger.info('Start reduce_features transform')
             X_train = self.reduce_features.transform(X_train)
-            logger.info(f'Размерность обучающего набора после PCA reduce_features {X_train.shape}')
+            logger.info(f'Dimensionality of the training set after PCA reduce_features {X_train.shape}')
         logger.info('Start IsolationForest fit')
         logger.debug(f'n_estimators={self.n_estimators}')
         self.model = IsolationForest(n_estimators=self.n_estimators, max_samples=0.9, contamination=0.005, verbose=1)
@@ -168,8 +175,10 @@ scaler = StandardScaler()
 need_to_save_mp3 = -1  # признак того, что там нужно записать в файл весь буфер, когда переменная равна 0
 
 if os.path.isfile(f'./model/{args.model_name}.zstd'): # загрузка стандартной модели
+    logger.info(f'Load model {args.model_name}.zstd')
     model = model_load(f'./model/{args.model_name}.zstd')
 if os.path.isfile(f'./model/{args.model_name}_n.zstd'): # загрузка экспериментальной модели
+    logger.info(f'Load experimental model {args.model_name}_n.zstd')
     model_n = model_load(f'./model/{args.model_name}_n.zstd')
     model_n.init_codename()
 
@@ -207,20 +216,20 @@ while True:
     if learning_signal_left_count > 0:
         scaler.partial_fit(features)
         learning_signal_left_count -= 1
-        if learning_signal_left_count == 0: logger.info(f'\nстатистика сигнала:\nmean {scaler.mean_}\nscale {scaler.scale_} ')
+        if learning_signal_left_count == 0: logger.info(f'\nSignal statistics:\nmean {scaler.mean_}\nscale {scaler.scale_} ')
 
     scaled_data_chunk = scaler.transform(features)
-    score = np.mean(np.abs(scaled_data_chunk))/1.1
-    signal_str = f'Аномальность {score:.3}  70%  {(np.percentile(np.abs(scaled_data_chunk),70)-0.3)/1.1:.3}; 90%  {(np.percentile(np.abs(scaled_data_chunk),90)-0.95)/1.1:.3}'
+    # score = np.mean(np.abs(scaled_data_chunk))/1.1
+    signal_str = f'Anomaly: {(np.percentile(np.abs(scaled_data_chunk),90)-0.95)/1.1:.3}'
     logger.debug(signal_str)
     score = (np.percentile(np.abs(scaled_data_chunk), 90) - 0.95)/1.2
     if smoothed_score>0.4:
-        signal_str = f'Аномальность {smoothed_score:.3}'
+        signal_str = f'Anomaly smoothed_score={smoothed_score:.3}'
         if score>1.5: signal_str += f'[90% {score:.3}]'
 
 
     if learning_signal_left_count < 1 and model == None:
-        logger.info('Создаем модель для нормальных звуков.')
+        logger.info('Creating a model for normal sounds.')
         # model_n = AudioNormsModel('silence') # экспериментальная модель
         # model_n.learn_model(mfcc_buff.items)
         # model_save(model_n, f'.\model\{args.model_name}_n.zstd')
@@ -231,7 +240,7 @@ while True:
         model_save(model, f'.\model\{args.model_name}.zstd')
         model_save(mfcc_buff, f'.\model\{args.model_name}_mfcc_buff.zstd')
         model = model_load(f'.\model\{args.model_name}.zstd')
-        logger.debug(f'Сокращаем после обучения размер mfcc_buff с {mfcc_buff.max_items} до {FOREST_FRAMES_INPUT * 3}')
+        logger.debug(f'We reduce the size of mfcc_buff from {mfcc_buff.max_items} to {FOREST_FRAMES_INPUT * 3} after training')
         mfcc_buff.max_items = FOREST_FRAMES_INPUT * 3  # нам ведь не нужны все данные, тут нам и меньше пойдет?
 
     score1 = -1  # признак, что модели нет в памяти
@@ -253,14 +262,14 @@ while True:
     smoothed_score = 0.8 * smoothed_score + 0.2 * score
     if learning_signal_left_count > 0 and score1 < 0:
         if model == None:
-            print(f'Режим обучения: {np.mean(np.abs(scaled_data_chunk)):.3} left_count={learning_signal_left_count}')
+            print(f'Learning mode: {np.mean(np.abs(scaled_data_chunk)):.3} left_count={learning_signal_left_count}')
         else:
-            print('Заполнение буфера', end='\r')
+            print('Buffer filling', end='\r')
     else:
         print(signal_str, end='\r')
         if score > 1.5 or smoothed_score>1.1:
             print('\n') # перевод строки
-            logger.warning('Сигнал об аномалии: ' + signal_str)
+            logger.warning('Anomaly alert: ' + signal_str)
             if need_to_save_mp3 < 0:  # если аномалия еще не пишется
                 from datetime import datetime
 
@@ -274,11 +283,11 @@ while True:
     if need_to_save_mp3 > 0: need_to_save_mp3 -= 1 # это в случае, если недавно обнаружили аномалию
     if need_to_save_mp3 < -1: need_to_save_mp3 += 1 # это в случае, если только что записали mp3
     if need_to_save_mp3 == 0:
-        logger.debug('Начало записи mp3')
+        logger.debug('Start recording mp3')
         need_to_save_mp3 = -history_buff.max_items  # признак того, что записали mp3
         os.makedirs(MP3PATH) if not os.path.exists(MP3PATH) else None
         full_path = os.path.join(MP3PATH, filename)
         export_to_MP3(history_buff.get_items(), RATE, full_path, kbps=128)
         model_save(mfcc_buff, full_path + '.mfcc')
-        logger.debug(f'Записали {full_path}')
+        logger.debug(f'Recorded {full_path}')
         if smoothed_score>1: smoothed_score = 1.00001
