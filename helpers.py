@@ -50,7 +50,7 @@ def model_save(model, file_path):
     with open(file_path, 'wb') as f:
         f.write(compressed_model)
     logger.info(f'Save object {file_path} len={len(serialized_model)}, compressed={len(compressed_model)} ratio = {len(compressed_model)/ len(serialized_model):.3}')
-    print(f"Объект сохранен в файл {file_path} с использованием компрессии zstd")
+    print(f"The object was saved to file {file_path} using zstd compression")
 
 
 def model_load(file_path):
@@ -67,5 +67,5 @@ def model_load(file_path):
     # десериализуем модель
     model = pickle.loads(decompressed_model)
 
-    print(f"Объект загружен из файла {file_path} (zstd компрессия)")
+    print(f"Object loaded from {file_path} (zstd compression)")
     return model
