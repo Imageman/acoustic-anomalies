@@ -4,6 +4,8 @@ import pyaudio
 import numpy as np
 import librosa
 
+import helpers
+
 try:
     import platform
     if float(platform.release()) > 7:  # Windows 7 
@@ -24,6 +26,7 @@ from tqdm import trange
 import argparse
 import os.path
 from sklearn.decomposition import FactorAnalysis
+from sklearn.decomposition import PCA
 
 from loguru import logger
 import sys
@@ -37,12 +40,16 @@ except  Exception as e:
     logger.debug(f'logger.add(sys.stdout) Error: {str(e)}')
 
 parser = argparse.ArgumentParser(description='Audio anomaly detect and save .mp3')
-parser.add_argument('--learning_time', '-l', default=10, type=int,
-                    help=r'Learning time (in minutes) for normal sound profile create. (Default: 10 minutes.)')
-parser.add_argument('--num_components', '-reduce_features', default=0, type=int,
-                    help=r'Principal Component Analysis components count (10-3500). (Default: 0; 0 - disabled.)')
+parser.add_argument('--learning_time', '-l', default=5, type=int,
+                    help=r'Learning time (in minutes) for normal sound profile create. (Default: 5 minutes.)')
+parser.add_argument('--n_mfcc', '-n', default=25, type=int,
+                    help=r'Number of MFCCs  (10-3500). (Default: 25)')
+parser.add_argument('--num_components', '-reduce_features', default=1000, type=int,
+                    help=r'Principal Component Analysis components count (10-3500). (Default: 1000; 0 - disabled.)')
 parser.add_argument('--num_estimators', '-e', default=300, type=int,
                     help=r'Number of simple evaluators for anomaly detection. More is better. (10-3500). (Default: 300)')
+parser.add_argument('--contamination', '-c', default=0.005, type=float,
+                    help=r'Expected ratio of anomalies in the training sample. The more noisy the sample is, the higher the number should be set (0.0-0.5). (Default: 0.005)')
 parser.add_argument('--MP3_len', '-mp3', default=14, type=int,
                     help=r'Length of .mp3 file. (Default: 14 seconds.)')
 parser.add_argument('--model_name', '-m', default='silence',
@@ -103,11 +110,18 @@ class AudioPCAModel:
     Очень быстрая модель. При необходимости сделается PCA для сокращения размерности, а потом
     изолирующий лес выявляет аномалии
     """
-    def __init__(self, num_components, n_estimators=300):
+    def __init__(self, num_components,contamination=0.005, n_estimators=300):
         self.num_components = num_components
+        self.contamination=contamination
         self.model = None
         self.reduce_features = None
         self.n_estimators=n_estimators
+        if self.contamination<0:
+            logger.warning(f'contamination={self.contamination}, replace with 0.005')
+            self.contamination=0.005
+        if self.contamination>0.5:
+            logger.warning(f'contamination={self.contamination}, replace with 0.5')
+            self.contamination=0.5
         if self.n_estimators<30:
             logger.warning(f'n_estimators={n_estimators}, replace with 30')
             self.n_estimators = 30
@@ -125,15 +139,15 @@ class AudioPCAModel:
         if self.num_components > 0:
             # proborFA(X_train)
             logger.info('Start reduce_features fit')
-            self.reduce_features = FactorAnalysis(n_components=self.num_components)
-            # self.reduce_features = PCA(n_components=self.num_components)
+            # self.reduce_features = FactorAnalysis(n_components=self.num_components)
+            self.reduce_features = PCA(n_components=self.num_components)
             self.reduce_features.fit(X_train)
             logger.info('Start reduce_features transform')
             X_train = self.reduce_features.transform(X_train)
             logger.info(f'Dimensionality of the training set after PCA reduce_features {X_train.shape}')
         logger.info('Start IsolationForest fit')
         logger.debug(f'n_estimators={self.n_estimators}')
-        self.model = IsolationForest(n_estimators=self.n_estimators, max_samples=0.9, contamination=0.005, verbose=1)
+        self.model = IsolationForest(n_estimators=self.n_estimators, max_samples=0.9, contamination=self.contamination, verbose=1)
         self.model.fit(X_train)
         logger.info('End learning')
         return self.model
@@ -199,16 +213,9 @@ while True:
     audio_data = np.frombuffer(stream.read(CHUNK_SIZE), dtype=np.float32)
     history_buff.add_item(audio_data)
     # Извлечение признаков из звуковых данных
-    features = extract_features(audio_data, n_mfcc=30)
+    features = extract_features(audio_data, n_mfcc=args.n_mfcc)
 
-    '''
-    fig, ax = plt.subplots(nrows=2, sharex=True, sharey=True)
-    librosa.display.specshow(features, y_axis='chroma', x_axis='time', ax=ax[0])
-    ax[0].set(title='features mfcc')
-    ax[0].label_outer()
-    plt.show()
-    '''
-
+    # helpers.visualize_features(features)
     features = features.transpose()
     for line in features:
         mfcc_buff.add_item(line)
@@ -235,7 +242,7 @@ while True:
         # model_save(model_n, f'.\model\{args.model_name}_n.zstd')
         # model_n = model_load(f'.\model\{args.model_name}_n.zstd')
 
-        model = AudioPCAModel(args.num_components, n_estimators= args.num_estimators)
+        model = AudioPCAModel(args.num_components, n_estimators= args.num_estimators, contamination=args.contamination)
         model.learn_model(mfcc_buff)
         model_save(model, f'.\model\{args.model_name}.zstd')
         model_save(mfcc_buff, f'.\model\{args.model_name}_mfcc_buff.zstd')
@@ -250,7 +257,7 @@ while True:
         y2 = model.predict(line)
         # y3 = model_n.predict(line)
         # signal_str = f'Forest predict {(1-y2[0])/2};  NormModel predict {y3[0]:.3};  stdscore {signal_str}'
-        signal_str = f'Forest predict {(1-y2[0])/2};   stdscore {signal_str}'
+        signal_str = f'Forest predict {(1-y2[0])/2}; stdscore {signal_str}'
         if score > 1.1 or y2[0] < 0 :
             logger.info(signal_str)
         if y2[0] < 0:
@@ -283,10 +290,10 @@ while True:
     if need_to_save_mp3 > 0: need_to_save_mp3 -= 1 # это в случае, если недавно обнаружили аномалию
     if need_to_save_mp3 < -1: need_to_save_mp3 += 1 # это в случае, если только что записали mp3
     if need_to_save_mp3 == 0:
-        logger.debug('Start recording mp3')
         need_to_save_mp3 = -history_buff.max_items  # признак того, что записали mp3
         os.makedirs(MP3PATH) if not os.path.exists(MP3PATH) else None
         full_path = os.path.join(MP3PATH, filename)
+        logger.info(f'Export to {full_path}.mp3')
         export_to_MP3(history_buff.get_items(), RATE, full_path, kbps=128)
         model_save(mfcc_buff, full_path + '.mfcc')
         logger.debug(f'Recorded {full_path}')

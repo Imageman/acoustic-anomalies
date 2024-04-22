@@ -2,11 +2,13 @@ import pickle
 import subprocess
 
 import librosa
+import loguru
 import numpy as np
 import zstandard
 from matplotlib import pyplot as plt
 from loguru import logger
 
+@logger.catch
 def visualize(y):
     S = librosa.feature.melspectrogram(y=y)
     mfccs = librosa.feature.mfcc(y=y, n_mfcc=40)
@@ -21,8 +23,15 @@ def visualize(y):
     fig.colorbar(img, ax=[ax[1]])
     ax[1].set(title='MFCC')
     plt.show()
+@logger.catch
+def visualize_features(features):
+    fig, ax = plt.subplots(nrows=2, sharex=True, sharey=True)
+    librosa.display.specshow(features, y_axis='chroma', x_axis='time', ax=ax[0])
+    ax[0].set(title='features mfcc')
+    ax[0].label_outer()
+    plt.show()
 
-
+@logger.catch
 def export_to_MP3(RAWitems, sample_rate, mp3_filename, kbps=160):
     l = subprocess.Popen(f"./bin/lame - -r -s {sample_rate} --preset {kbps} -m m {mp3_filename}", stdin=subprocess.PIPE)
     for item in RAWitems:
