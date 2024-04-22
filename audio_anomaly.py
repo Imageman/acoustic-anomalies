@@ -296,7 +296,7 @@ while True:
         need_to_save_mp3 = -history_buff.max_items  # признак того, что записали mp3
         os.makedirs(MP3PATH) if not os.path.exists(MP3PATH) else None
         full_path = os.path.join(MP3PATH, filename)
-        logger.info(f'Export to {full_path}.mp3')
+        logger.info(f'Export to {full_path}')
         export_to_MP3(history_buff.get_items(), RATE, full_path, kbps=128)
         model_save(mfcc_buff, full_path + '.mfcc')
         logger.debug(f'Recorded {full_path}')

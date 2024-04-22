@@ -1,7 +1,7 @@
 # acoustic-anomalies
 Proof of concept. Capture sound from a microphone, build a reference profile of noise and/or sounds and then search for anomalies (difference from the reference).
 
-The first phase after launch is to build a profile.
+The first phase after launch is to build a profile:
 ![build-profile.png](help%2Fbuild-profile.png)
 
 After collecting the statistics, an acoustic profile (model) is built.
