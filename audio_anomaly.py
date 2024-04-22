@@ -105,7 +105,7 @@ def get_line(data_array: list, num='last'):
 
 class AudioPCAModel:
     """
-    A very fast model. PCA to reduce dimensionality if necessary, and then the the isolation forest reveals anomalies
+    A very fast model. PCA to reduce dimensionality if necessary, and then the the isolation forest reveals anomalies.
 
     Очень быстрая модель. При необходимости сделается PCA для сокращения размерности, а потом
     изолирующий лес выявляет аномалии
