@@ -162,6 +162,9 @@ class AudioPCAModel:
 
 logger.info('Start')
 
+if not os.path.isdir('bin') or not os.path.isfile('./bin/lame.exe'):
+    logger.warning('Create folder bin, download and put binary file lame.exe')
+
 model = None
 
 history_buff = buffer.RecentItems((SECONDS_MP3 * RATE) // CHUNK_SIZE + 1)

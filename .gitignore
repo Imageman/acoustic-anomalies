@@ -1,7 +1,7 @@
 .idea/
 __pycache__/
 tmp/
-bin/
+bin/opusenc.exe
 *.bak
 *.mp3
 *.zstd
