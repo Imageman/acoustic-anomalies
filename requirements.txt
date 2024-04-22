@@ -1,0 +1,8 @@
+loguru
+librosa
+numpy
+pyaudio
+sklearn
+tqdm
+zstandard
+matplotlib
